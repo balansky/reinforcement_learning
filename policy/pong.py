@@ -1,7 +1,7 @@
 from . import *
-import gym
 import cv2
 from collections import deque
+from utils import policy_rewards
 
 class Net(torch.nn.Module):
 
@@ -12,7 +12,7 @@ class Net(torch.nn.Module):
         self.conv3 = torch.nn.Conv2d(64, 128, 4, 2)
 
         self.fc1 = torch.nn.Linear(128*3*3, 512)
-        self.head = torch.nn.Linear(512, 2)
+        self.head = torch.nn.Linear(512, 3)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -65,7 +65,6 @@ class PongV0(object):
         state = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self._device)
         return state, frame_stack
 
-
     def run_eposide(self, gamma):
         state, stack = self.stacked_state(self._env.reset())
         eposide_rewards = []
@@ -75,20 +74,21 @@ class PongV0(object):
         while not done:
             logits = self._net(state)
             action_probability_distribution = F.softmax(logits).cpu().detach().numpy()
-            action = 0 if np.random.uniform() < action_probability_distribution.ravel()[0] else 1
-            # action = np.random.choice(range(action_probability_distribution.shape[1]),
-            #                           p=action_probability_distribution.ravel())
-            next_frame, reward, done, info = self._env.step(action + 2)
+            # action = 0 if np.random.uniform() < action_probability_distribution.ravel()[0] else 1
+            action = np.random.choice(range(action_probability_distribution.shape[1]),
+                                      p=action_probability_distribution.ravel())
+            next_frame, reward, done, info = self._env.step(action + 1)
             state, stack = self.stacked_state(next_frame, stack)
             eposide_logits.append(logits.squeeze(0))
+            # eposide_logits.append(torch.log(F.softmax(logits, dim=1)))
             eposide_actions.append(action)
             eposide_rewards.append(reward)
             if reward == -1 or reward == 1:
                 done = True
-        discount_eposide_rewards = discount_and_normalize_rewards(gamma, eposide_rewards)
+        discount_eposide_rewards = policy_rewards.discount_episode_rewards(gamma, eposide_rewards)
         return eposide_logits, eposide_actions, discount_eposide_rewards, np.sum(eposide_rewards)
 
-    def train(self, num_batchs, batch_eposides, lr=0.0001, gamma=0.95):
+    def train(self, num_batchs, batch_eposides, lr=1e-4, gamma=0.95):
         criterion = torch.nn.CrossEntropyLoss(reduction='none')
         optimizer = torch.optim.RMSprop(self._net.parameters(), lr)
         for i in range(num_batchs):
@@ -103,18 +103,19 @@ class PongV0(object):
                 actions.extend(eposide_actions)
                 discount_rewards.extend(discount_eposide_rewards)
                 rewards.append(eposide_reward)
+            discount_rewards = policy_rewards.normailize_rewards(discount_rewards)
             batch_actions = torch.tensor(actions, dtype=torch.long).to(self._device)
             batch_logits = torch.stack(logits)
             batch_discount_rewards = torch.tensor(discount_rewards, dtype=torch.float32).to(self._device)
             batch_reward = np.sum(rewards)
             loss = criterion(batch_logits, batch_actions)
-            loss = torch.mean(loss * batch_discount_rewards)
+            loss = (loss * batch_discount_rewards).sum()
             loss.backward()
             # for group in optimizer.param_groups:
             #     for p in group['params']:
             #         p.grad = -1 * p.grad
-            for param in self._net.parameters():
-                param.grad.data.clamp_(-1, 1)
+            # for param in self._net.parameters():
+            #     param.grad.data.clamp_(-1, 1)
 
             optimizer.step()
             print("==========================================")
