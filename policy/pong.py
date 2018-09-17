@@ -3,6 +3,7 @@ import cv2
 from collections import deque
 import os
 from utils import policy_rewards
+import time
 
 class Net(torch.nn.Module):
 
@@ -47,6 +48,9 @@ class PongV0(object):
             else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._model_path = model_path
         self._net = Net().to(self._device)
+
+    def __del__(self):
+        self._env.close()
 
     # def preprocess_frame(self, frame):
     #     frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
@@ -107,6 +111,23 @@ class PongV0(object):
                 done = True
         discount_eposide_rewards = policy_rewards.discount_episode_rewards(gamma, eposide_rewards)
         return eposide_logits, eposide_actions, discount_eposide_rewards, np.sum(eposide_rewards)
+
+
+    def play(self):
+        self._net.load_state_dict(torch.load(self._model_path))
+        state, previous = self.substract_frame(self._env.reset())
+        done = False
+        while not done:
+            self._env.render()
+            logits = self._net(state)
+            action_probability_distribution = F.softmax(logits).cpu().detach().numpy()
+            # action = 0 if np.random.uniform() < action_probability_distribution.ravel()[0] else 1
+            action = np.random.choice(range(action_probability_distribution.shape[1]),
+                                      p=action_probability_distribution.ravel())
+            next_frame, reward, done, info = self._env.step(action + 1)
+            state, previous = self.substract_frame(next_frame, previous)
+            time.sleep(0.02)
+
 
     def train(self, num_batchs, batch_eposides, lr=1e-4, gamma=0.95, resume=False):
         if resume and os.path.exists(self._model_path):
