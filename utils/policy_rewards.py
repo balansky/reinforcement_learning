@@ -14,5 +14,5 @@ def discount_episode_rewards(gamma, episode_rewards):
 def normailize_rewards(rewards):
     mean = np.mean(rewards)
     std = np.std(rewards)
-    normalized_rewards = (rewards - mean) / (std)
+    normalized_rewards = (rewards - mean) / (std + 0.000001)
     return normalized_rewards

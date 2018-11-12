@@ -35,14 +35,35 @@
 import random
 import time
 import cv2
-from qlearning import frozenlake, escape
+# from qlearning import frozenlake, escape
+from policy import escape
 import gym
 import torch
 import matplotlib.pyplot as plt
 
 
-je = escape.JourneyEscape()
+def gym_run():
+    env = gym.make("JourneyEscape-v0")
+    action_space = env.action_space.n
+    actions = [i for i in range(action_space)]
+    print(action_space)
+    env.reset()
+    for i in range(1000):
+        action = random.choice(actions)
+        state, reward, done, info = env.step(action)
+        if i % 3 == 0 or i == 0:
+            env.render()
+        print(reward)
+        time.sleep(0.2)
+        if done:
+            env.reset()
+            print("reset")
+
+# gym_run()
+device = torch.device("cuda:0")
+je = escape.JourneyEscape(device=device)
 je.train()
+# je.play()
 # mm = je.env.reset()
 # ss, stacked_ss = je.stack_states(mm)
 # mn, _, _, _ = je.env.step(1)
