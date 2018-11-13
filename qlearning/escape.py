@@ -2,6 +2,7 @@ import gym
 import torchvision
 import torch
 from collections import deque, namedtuple
+from utils.policy_rewards import discount_episode_rewards, normailize_rewards
 import copy
 import time
 
@@ -171,63 +172,125 @@ class JourneyEscape(object):
                 state, stacked_states = self.stack_states(next_raw_state, stacked_states)
 
 
-
-    def train(self, learning_rate=0.0002, max_episodes=50000, max_steps=1000, batch_size=128, memory_capacity=30000,
-              target_updates=100):
+    def train(self, learning_rate=0.0002, max_iterations=50000, max_episode_steps=1000, batch_size=128,
+              memory_capacity=30000, target_updates=1000):
         optimizer = torch.optim.RMSprop(self.net.parameters(), lr=learning_rate)
         target_net = copy.deepcopy(self.net).to(self.device)
         target_net.load_state_dict(self.net.state_dict())
         target_net.eval()
         self.memory = ReplayMemory(memory_capacity)
-        episodes = 0
         steps = 0
+        rewards = []
         agg_losses = []
-        episode_rewards = []
-        while episodes < max_episodes:
+        while True:
             self.env.reset()
             state, stacked_states = self.stack_states(self.env.render(mode='rgb_array'))
-            episode_reward = 0
-
-            for _ in range(max_steps):
+            episode_rewards = []
+            episode_states = []
+            episode_actions = []
+            for _ in range(max_episode_steps):
                 if len(self.memory) == 0:
                     print("Filling Samples into Replay Memory...")
                 action = self.select_action(state, steps)
                 next_raw_state, reward, done, info = self.env.step(action.item())
                 if reward < 0:
-                    reward = -1.
+                    reward = -100.
                     done = True
                 else:
                     reward = 1.
-                episode_reward += reward
-                reward = torch.tensor([reward], device=self.device)
+                rewards.append(reward)
+                episode_rewards.append(reward)
+                episode_actions.append(action)
+                # reward = torch.tensor([reward], device=self.device)
                 if not done:
                     next_state, stacked_states = self.stack_states(next_raw_state, stacked_states)
-                    # if random.choice([0, 1, 2]) == 0:
-                    if self.do_explore(steps, 0.0001, 0.05):
-                        self.memory.push(state, action, next_state, reward)
+                    episode_states.append((state, next_state))
                 else:
                     next_state = None
-                    self.memory.push(state, action, next_state, reward)
+                    episode_states.append((state, next_state))
+                    discounted_rewards = discount_episode_rewards(0.95, episode_rewards)
+                    discounted_rewards = normailize_rewards(discounted_rewards)
+                    for i in range(len(discounted_rewards)):
+
+                        self.memory.push(episode_states[i][0], episode_actions[i], episode_states[i][1],
+                                         torch.tensor([discounted_rewards[i]], device=self.device))
                 state = next_state
                 if len(self.memory) > batch_size:
                     if steps == 0:
                         print("Start Training...")
                     loss = self.optimize_model(optimizer, batch_size, target_net)
                     agg_losses.append(loss.item())
-                    if steps % 100 == 0:
-                        print("Loss at Step %d: %.4f" % (steps, sum(agg_losses)/len(agg_losses)))
+                    if steps % 1000 == 0 or steps == max_iterations:
+                        print("[%d] Loss: %.4f, Mean Rewards: %.4f" % (steps, sum(agg_losses)/len(agg_losses), sum(rewards)/len(rewards)))
                         agg_losses = []
+                        rewards = []
+
+                    if steps % target_updates == 0:
+                        target_net.load_state_dict(self.net.state_dict())
                     steps += 1
                 if done:
                     break
-            episode_rewards.append(episode_reward)
-
-            if len(self.memory) >= batch_size:
-                if episodes % target_updates == 0:
-                    target_net.load_state_dict(self.net.state_dict())
-                torch.save(self.net.state_dict(), self.model_path)
-                if episodes % 100 == 0 or episodes == max_episodes:
-                    print("[%d]Eposide Rewards: %s" % (episodes, sum(episode_rewards)/len(episode_rewards)))
-                    episode_rewards = []
-                episodes += 1
+            if steps == max_iterations:
+                break
         print("Finish Training...")
+
+
+    # def train(self, learning_rate=0.0002, max_episodes=50000, max_steps=1000, batch_size=128, memory_capacity=30000,
+    #           target_updates=100):
+    #     optimizer = torch.optim.RMSprop(self.net.parameters(), lr=learning_rate)
+    #     target_net = copy.deepcopy(self.net).to(self.device)
+    #     target_net.load_state_dict(self.net.state_dict())
+    #     target_net.eval()
+    #     self.memory = ReplayMemory(memory_capacity)
+    #     episodes = 0
+    #     steps = 0
+    #     agg_losses = []
+    #     episode_rewards = []
+    #     while episodes < max_episodes:
+    #         self.env.reset()
+    #         state, stacked_states = self.stack_states(self.env.render(mode='rgb_array'))
+    #         episode_reward = 0
+    #
+    #         for _ in range(max_steps):
+    #             if len(self.memory) == 0:
+    #                 print("Filling Samples into Replay Memory...")
+    #             action = self.select_action(state, steps)
+    #             next_raw_state, reward, done, info = self.env.step(action.item())
+    #             if reward < 0:
+    #                 reward = -1.
+    #                 done = True
+    #             else:
+    #                 reward = 1.
+    #             episode_reward += reward
+    #             reward = torch.tensor([reward], device=self.device)
+    #             if not done:
+    #                 next_state, stacked_states = self.stack_states(next_raw_state, stacked_states)
+    #                 # if random.choice([0, 1, 2]) == 0:
+    #                 if self.do_explore(steps, 0.0001, 0.05):
+    #                     self.memory.push(state, action, next_state, reward)
+    #             else:
+    #                 next_state = None
+    #                 self.memory.push(state, action, next_state, reward)
+    #             state = next_state
+    #             if len(self.memory) > batch_size:
+    #                 if steps == 0:
+    #                     print("Start Training...")
+    #                 loss = self.optimize_model(optimizer, batch_size, target_net)
+    #                 agg_losses.append(loss.item())
+    #                 if steps % 100 == 0:
+    #                     print("Loss at Step %d: %.4f" % (steps, sum(agg_losses)/len(agg_losses)))
+    #                     agg_losses = []
+    #                 steps += 1
+    #             if done:
+    #                 break
+    #         episode_rewards.append(episode_reward)
+    #
+    #         if len(self.memory) >= batch_size:
+    #             if episodes % target_updates == 0:
+    #                 target_net.load_state_dict(self.net.state_dict())
+    #             torch.save(self.net.state_dict(), self.model_path)
+    #             if episodes % 100 == 0 or episodes == max_episodes:
+    #                 print("[%d]Eposide Rewards: %s" % (episodes, sum(episode_rewards)/len(episode_rewards)))
+    #                 episode_rewards = []
+    #             episodes += 1
+    #     print("Finish Training...")
