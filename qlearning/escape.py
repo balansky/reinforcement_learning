@@ -172,7 +172,7 @@ class JourneyEscape(object):
                 state, stacked_states = self.stack_states(next_raw_state, stacked_states)
 
 
-    def train(self, learning_rate=0.0002, max_iterations=50000, max_episode_steps=1000, batch_size=128,
+    def train(self, learning_rate=0.0002, max_iterations=5000000, max_episode_steps=1000, batch_size=128,
               memory_capacity=30000, target_updates=1000):
         optimizer = torch.optim.RMSprop(self.net.parameters(), lr=learning_rate)
         target_net = copy.deepcopy(self.net).to(self.device)
