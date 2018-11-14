@@ -158,18 +158,21 @@ class JourneyEscape(object):
         self.net.load_state_dict(torch.load(self.model_path))
         self.env.reset()
         done = False
+        frames = []
         state, stacked_states = self.stack_states(self.env.render(mode='rgb_array'))
         while not done:
             with torch.no_grad():
                 action = self.net(state).max(1)[1].view(1, 1)
             next_raw_state, reward, done, info = self.env.step(action.item())
             self.env.render()
-            time.sleep(0.1)
+            frames.append(self.env.render(mode='rgb_array'))
+            # time.sleep(0.1)
             if reward < 0:
                 done = True
 
             if not done:
                 state, stacked_states = self.stack_states(next_raw_state, stacked_states)
+        return frames
 
 
     def train(self, learning_rate=0.0002, max_iterations=5000000, max_episode_steps=1000, batch_size=128,
