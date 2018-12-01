@@ -4,6 +4,7 @@ import gym
 from collections import deque
 import numpy as np
 from utils import policy_rewards
+import time
 
 
 class Network(torch.nn.Module):
@@ -70,6 +71,33 @@ class JourneyEscape(object):
         torch_state = torch.cat([stacked_states[s] for s in range(self.stack_size)], 0).unsqueeze(0).to(self.device)
         return torch_state, stacked_states
 
+
+    def play(self):
+        self.net.eval()
+        self.net.load_state_dict(torch.load(self.model_path))
+        self.env.reset()
+        done = False
+        # frames = []
+        state, stacked_states = self.stack_states(self.env.render(mode='rgb_array'))
+        while not done:
+            with torch.no_grad():
+                # action = self.net(state).max(1)[1].view(1, 1)
+                logit_output = self.net(state)
+                action_distribution = torch.nn.functional.softmax(logit_output).detach().to("cpu").numpy()[0]
+                action = np.random.choice(range(action_distribution.shape[0]),
+                                          p=action_distribution)
+            next_raw_state, reward, done, info = self.env.step(action)
+            self.env.render()
+            # frames.append(self.env.render(mode='rgb_array'))
+            time.sleep(0.1)
+            if reward < 0:
+                done = True
+
+            if not done:
+                state, stacked_states = self.stack_states(next_raw_state, stacked_states)
+        self.env.reset()
+        # return frames
+
     def run_episode(self, gamma, max_steps):
         done = False
         self.env.reset()
@@ -83,19 +111,21 @@ class JourneyEscape(object):
             action = np.random.choice(range(action_distribution.shape[0]),
                                       p=action_distribution)
             next_raw_state, reward, done, info = self.env.step(action)
-            if steps >= max_steps:
+            # if steps >= max_steps:
+            #     done = True
+            # step_reward = 0
+            if steps >= max_steps and reward >= 0:
+                step_reward = reward + 1.
                 done = True
-            # if steps >= max_steps and reward == 0:
-            #     reward = 1.
-            #     done = True
-            elif reward == 0:
-                reward = 1.
-            # elif reward < 0:
-            #     reward = 0.
-            #     done = True
+            elif reward < 0:
+                step_reward = -100.
+                done = True
+            else:
+                step_reward = reward + 1.
+
             state, stacked_states = self.stack_states(next_raw_state, stacked_states)
             episode_logits.append(logit_output)
-            episode_rewards.append(reward)
+            episode_rewards.append(step_reward)
             episode_actions.append(action)
         episode_reward_sum = np.sum(episode_rewards)
         discounted_episode_reward = policy_rewards.discount_episode_rewards(gamma, episode_rewards)
@@ -126,17 +156,21 @@ class JourneyEscape(object):
         return batch_actions, batch_logits, batch_discounted_rewards, batch_rewards_mean
 
 
-    def train(self, batch_size=128, learning_rate=0.0002, gamma=0.95, max_iterations=500000, max_steps=1000):
+    def train(self, batch_size=64, learning_rate=0.0001, gamma=0.95, max_iterations=50000, max_steps=1000):
         optimizer = torch.optim.RMSprop(self.net.parameters(), lr=learning_rate)
         criterion = torch.nn.CrossEntropyLoss(reduction='none')
         total_rewards = []
         total_losses = []
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.9)
+        running_reward = None
         for iter in range(max_iterations):
             batch_actions, batch_logits, batch_discounted_rewards, batch_rewards_mean = self.make_batch(batch_size, gamma, max_steps)
             neg_log_prob = criterion(batch_logits, batch_actions)
             loss = (neg_log_prob * batch_discounted_rewards).mean()
             total_rewards.append(batch_rewards_mean)
             total_losses.append(loss.item())
+            running_reward = batch_rewards_mean if running_reward is None else running_reward * 0.99 + batch_rewards_mean * 0.01
+            scheduler.step()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -144,7 +178,7 @@ class JourneyEscape(object):
                 print("==========================================")
                 print("Iteration: ", iter + 1)
                 print("Loss: {}".format(np.mean(total_losses)))
-                print("Reward Mean: ", np.mean(total_rewards))
+                print("Reward Mean: ", running_reward)
                 torch.save(self.net.state_dict(), self.model_path)
                 total_rewards = []
                 total_losses = []

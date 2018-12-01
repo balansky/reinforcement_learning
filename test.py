@@ -35,8 +35,8 @@
 import random
 import time
 import cv2
-from qlearning import frozenlake, escape
-# from policy import escape
+# from qlearning import frozenlake, escape
+from policy import escape
 import gym
 import torch
 import matplotlib.pyplot as plt
